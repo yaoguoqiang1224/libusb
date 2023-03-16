@@ -30,6 +30,13 @@
 #include <ctype.h>
 #include <stdio.h>
 
+/*  Modified by YaoGQ  */
+/*  Modify Starting Point*/
+#include <inttypes.h>
+#include <objbase.h>
+#include <winioctl.h>
+/*  Modify End Point*/
+
 #include "libusbi.h"
 #include "windows_winusb.h"
 
@@ -168,6 +175,49 @@ static char *normalize_path(const char *path)
 
 	return ret_path;
 }
+
+/*  Modified by YaoGQ  */
+/*  Modify Starting Point*/
+static char* sanitize_path(const char* path)
+{
+	const char root_prefix[] = "\\\\.\\";
+	size_t j, size, root_size;
+	char* ret_path = NULL;
+	size_t add_root = 0;
+
+	if (path == NULL)
+		return NULL;
+
+	size = strlen(path) + 1;
+	root_size = sizeof(root_prefix) - 1;
+
+	// Microsoft indiscriminately uses '\\?\', '\\.\', '##?#" or "##.#" for root prefixes.
+	if (!((size > 3) && (((path[0] == '\\') && (path[1] == '\\') && (path[3] == '\\'))
+		|| ((path[0] == '#') && (path[1] == '#') && (path[3] == '#'))))) {
+		add_root = root_size;
+		size += add_root;
+	}
+
+	ret_path = calloc(1, size);
+	if (ret_path == NULL)
+		return NULL;
+
+	strcpy(&ret_path[add_root], path);
+
+	// Ensure consistency with root prefix
+	for (j = 0; j < root_size; j++)
+		ret_path[j] = root_prefix[j];
+
+	// Same goes for '\' and '#' after the root prefix. Ensure '#' is used
+	for (j = root_size; j < size; j++) {
+		ret_path[j] = (char)toupper((int)ret_path[j]); // Fix case too
+		if (ret_path[j] == '\\')
+			ret_path[j] = '#';
+	}
+
+	return ret_path;
+}
+/*  Modify End Point*/
 
 /*
  * Cfgmgr32, AdvAPI32, OLE32 and SetupAPI DLL functions
@@ -332,6 +382,77 @@ static int get_interface_details(struct libusb_context *ctx, HDEVINFO dev_info,
 
 	return LIBUSB_SUCCESS;
 }
+
+/*  Modified by YaoGQ  */
+/*  Modify Starting Point*/
+static SP_DEVICE_INTERFACE_DETAIL_DATA_A *get_interface_details_win(struct libusb_context *ctx,
+	HDEVINFO *dev_info, SP_DEVINFO_DATA *dev_info_data, const GUID *guid, unsigned _index)
+{
+	SP_DEVICE_INTERFACE_DATA dev_interface_data;
+	SP_DEVICE_INTERFACE_DETAIL_DATA_A *dev_interface_details = NULL;
+	DWORD size;
+
+	if (_index <= 0)
+		*dev_info = pSetupDiGetClassDevsA(guid, NULL, NULL, DIGCF_PRESENT|DIGCF_DEVICEINTERFACE);
+
+	if (dev_info_data != NULL) {
+		dev_info_data->cbSize = sizeof(SP_DEVINFO_DATA);
+		if (!pSetupDiEnumDeviceInfo(*dev_info, _index, dev_info_data)) {
+			if (GetLastError() != ERROR_NO_MORE_ITEMS)
+				usbi_err(ctx, "Could not obtain device info data for index %u: %s",
+					_index, windows_error_str(0));
+
+			pSetupDiDestroyDeviceInfoList(*dev_info);
+			*dev_info = INVALID_HANDLE_VALUE;
+			return NULL;
+		}
+	}
+
+	dev_interface_data.cbSize = sizeof(SP_DEVICE_INTERFACE_DATA);
+	if (!pSetupDiEnumDeviceInterfaces(*dev_info, NULL, guid, _index, &dev_interface_data)) {
+		if (GetLastError() != ERROR_NO_MORE_ITEMS)
+			usbi_err(ctx, "Could not obtain interface data for index %u: %s",
+				_index, windows_error_str(0));
+
+		pSetupDiDestroyDeviceInfoList(*dev_info);
+		*dev_info = INVALID_HANDLE_VALUE;
+		return NULL;
+	}
+
+	// Read interface data (dummy + actual) to access the device path
+	if (!pSetupDiGetDeviceInterfaceDetailA(*dev_info, &dev_interface_data, NULL, 0, &size, NULL)) {
+		// The dummy call should fail with ERROR_INSUFFICIENT_BUFFER
+		if (GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
+			usbi_err(ctx, "could not access interface data (dummy) for index %u: %s",
+				_index, windows_error_str(0));
+			goto err_exit;
+		}
+	} else {
+		usbi_err(ctx, "program assertion failed - http://msdn.microsoft.com/en-us/library/ms792901.aspx is wrong.");
+		goto err_exit;
+	}
+
+	dev_interface_details = calloc(1, size);
+	if (dev_interface_details == NULL) {
+		usbi_err(ctx, "could not allocate interface data for index %u.", _index);
+		goto err_exit;
+	}
+
+	dev_interface_details->cbSize = sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_A);
+	if (!pSetupDiGetDeviceInterfaceDetailA(*dev_info, &dev_interface_data,
+		dev_interface_details, size, &size, NULL)) {
+		usbi_err(ctx, "could not access interface data (actual) for index %u: %s",
+			_index, windows_error_str(0));
+	}
+
+	return dev_interface_details;
+
+err_exit:
+	pSetupDiDestroyDeviceInfoList(*dev_info);
+	*dev_info = INVALID_HANDLE_VALUE;
+	return NULL;
+}
+/*  Modify End Point*/
 
 /* For libusb0 filter */
 static int get_interface_details_filter(struct libusb_context *ctx, HDEVINFO *dev_info,
@@ -1038,6 +1159,37 @@ make_descriptors:
 	return r;
 }
 
+/*  Modified by YaoGQ  */
+/*  Modify Starting Point*/
+static int find_device_volume(struct libusb_device *dev, unsigned int volume_dev_size, struct volume_device_priv *volume_dev)
+{
+	if(dev){
+		memset(dev->volume, 0, 10);
+		int size = 0;
+		int ret = -1;
+		char tmpVoulme[260];
+		memset(tmpVoulme, 0, sizeof(tmpVoulme));
+		char* afterVolume = NULL;
+		memcpy(tmpVoulme, dev->device_key, strlen(dev->device_key));
+		afterVolume = sanitize_path(tmpVoulme);
+		
+		for(int i = 0; i < volume_dev_size; i++){
+			ret = strcmp(volume_dev[i].device_key, afterVolume);
+			printf("ret = %d\n",ret);
+			if(ret == 0){
+				dev->volume[size] = volume_dev[i].letter;
+				size++;
+			}
+		}
+		if (afterVolume)
+		{
+			safe_free(afterVolume);
+		}
+	}
+	return 0;
+}
+/*  Modify End Point*/
+
 /*
  * Populate a libusb device structure
  */
@@ -1049,6 +1201,12 @@ static int init_device(struct libusb_device *dev, struct libusb_device *parent_d
 	struct winusb_device_priv *priv, *parent_priv, *tmp_priv;
 	USB_NODE_CONNECTION_INFORMATION_EX conn_info;
 	USB_NODE_CONNECTION_INFORMATION_EX_V2 conn_info_v2;
+
+/*  Modified by YaoGQ  */
+/*  Modify Starting Point*/
+	USB_NODE_INFORMATION    hubInfo;
+/*  Modify End Point*/
+
 	HANDLE hub_handle;
 	DWORD size;
 	uint8_t bus_number, depth;
@@ -1100,6 +1258,11 @@ static int init_device(struct libusb_device *dev, struct libusb_device *parent_d
 			usbi_err(ctx, "program assertion failed - bus number not found for '%s'", priv->dev_id);
 			return LIBUSB_ERROR_NOT_FOUND;
 		}
+
+/*  Modified by YaoGQ  */
+/*  Modify Starting Point*/
+		memcpy(dev->device_key, priv->dev_id, MAX_PATH_LENGTH);
+/*  Modify End Point*/
 
 		dev->bus_number = bus_number;
 		dev->port_number = port_number;
@@ -1189,6 +1352,33 @@ static int init_device(struct libusb_device *dev, struct libusb_device *parent_d
 		}
 
 		CloseHandle(hub_handle);
+/*  Modified by YaoGQ  */
+/*  Modify Starting Point*/
+		if(priv->path != NULL){
+
+			if (conn_info.DeviceDescriptor.bDeviceClass == LIBUSB_CLASS_HUB) {
+				hub_handle = CreateFileA(priv->path, GENERIC_WRITE, FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
+					0, NULL);
+				if (hub_handle == INVALID_HANDLE_VALUE) {
+					usbi_err(ctx, "fuyao could not open hub %s: %s", priv->path, windows_error_str(0));
+					//return LIBUSB_ERROR_ACCESS;
+				}
+				else {
+					size = sizeof(USB_NODE_INFORMATION);
+					memset(&hubInfo, 0, size);
+					if (DeviceIoControl(hub_handle, IOCTL_USB_GET_NODE_INFORMATION, NULL, 0,
+						&hubInfo, size, &size, NULL)) {
+						dev->num_child = hubInfo.u.HubInformation.HubDescriptor.bNumberOfPorts;
+						usbi_warn(ctx, "fuyao device is hub get hub ports success num = %d (vid:pid - %4x:%4x)", hubInfo.u.HubInformation.HubDescriptor.bNumberOfPorts, conn_info.DeviceDescriptor.idVendor, conn_info.DeviceDescriptor.idProduct);
+					}
+					else {
+						usbi_err(ctx, "fuyao device '%s' is hub but can't get hub ports num error '%s'", priv->path, windows_error_str(0));
+					}
+					CloseHandle(hub_handle);
+				}
+			}
+		}
+/*  Modify End Point*/
 
 		if (conn_info.DeviceAddress > UINT8_MAX)
 			usbi_err(ctx, "program assertion failed - device address overflow");
@@ -1427,6 +1617,137 @@ static int set_hid_interface(struct libusb_context *ctx, struct libusb_device *d
 	return LIBUSB_SUCCESS;
 }
 
+/*  Modified by YaoGQ  */
+/*  Modify Starting Point*/
+DEVINST windows_get_device_inst(struct libusb_context *ctx, long DeviceNumber,
+	UINT DriveType, char* szDosDeviceName)
+{
+	BOOL IsFloppy = (strstr(szDosDeviceName,
+		"\\Floppy") != NULL); // is there a better way?
+
+	GUID* guid;
+
+	switch (DriveType) {
+	case DRIVE_REMOVABLE:
+		if (IsFloppy) {
+			guid = (GUID*)&GUID_DEVINTERFACE_FLOPPY;
+		}
+		else {
+			guid = (GUID*)&GUID_DEVINTERFACE_DISK;
+		}
+		break;
+	case DRIVE_FIXED:
+		guid = (GUID*)&GUID_DEVINTERFACE_DISK;
+		break;
+	case DRIVE_CDROM:
+		guid = (GUID*)&GUID_DEVINTERFACE_CDROM;
+		break;
+	default:
+		return 0;
+	}
+	HDEVINFO dev_info = { 0 };
+
+	SP_DEVINFO_DATA dev_info_data = { 0 };
+	SP_DEVICE_INTERFACE_DETAIL_DATA_A *dev_interface_details = NULL;
+	DWORD dwIndex = 0;
+	char *dev_interface_path = NULL;
+	while (1) {
+		dev_interface_details = get_interface_details_win(ctx, &dev_info, &dev_info_data, guid, dwIndex);
+		if (NULL == dev_interface_details) {
+			break;
+		}
+		dev_interface_path = sanitize_path(dev_interface_details->DevicePath);
+		HANDLE hDrive = CreateFileA(dev_interface_path, 0,
+			FILE_SHARE_READ | FILE_SHARE_WRITE,
+			NULL, OPEN_EXISTING, 0, NULL);
+		if (hDrive != INVALID_HANDLE_VALUE) {
+			STORAGE_DEVICE_NUMBER sdn;
+			DWORD dwBytesReturned = 0;
+			BOOL res = DeviceIoControl(hDrive,
+				IOCTL_STORAGE_GET_DEVICE_NUMBER,
+				NULL, 0, &sdn, sizeof(sdn),
+				&dwBytesReturned, NULL);
+			if (res) {
+				if (DeviceNumber == (long)sdn.DeviceNumber) {
+					CloseHandle(hDrive);
+					pSetupDiDestroyDeviceInfoList(dev_info);
+					dev_info = NULL;
+					safe_free(dev_interface_details);
+					safe_free(dev_interface_path);
+					return dev_info_data.DevInst;
+				}
+			}
+			CloseHandle(hDrive);
+		}
+		safe_free(dev_interface_details);
+		safe_free(dev_interface_path);
+		dwIndex++;
+	}
+
+	pSetupDiDestroyDeviceInfoList(dev_info);
+	dev_info = NULL;
+	safe_free(dev_interface_details);
+	safe_free(dev_interface_path);
+	return 0;
+}
+
+static DEVINST windows_get_device_id(struct libusb_context *ctx, char letter, char *device_id)
+{
+	char DriveLetter = letter;
+	DriveLetter &= ~0x20; // uppercase
+
+	if (DriveLetter < 'A' || DriveLetter > 'Z') {
+		return 0;
+	}
+	printf("%zd\n", strlen(device_id));
+	char szRootPath[] = "X:\\";   // "X:\"  -> for GetDriveType
+	szRootPath[0] = DriveLetter;
+
+	char szDevicePath[] = "X:";   // "X:"   -> for QueryDosDevice
+	szDevicePath[0] = DriveLetter;
+
+	char szVolumeAccessPath[] = "\\\\.\\X:";   // "\\.\X:"  -> to open the volume
+	szVolumeAccessPath[4] = DriveLetter;
+
+	long DeviceNumber = -1;
+
+	// open the storage volume
+	HANDLE hVolume = CreateFileA(szVolumeAccessPath, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+	//               CreateFile(diskname, (GENERIC_WRITE | GENERIC_READ), (FILE_SHARE_READ | FILE_SHARE_WRITE), NULL, OPEN_EXISTING, 0, NULL);
+	if (hVolume == INVALID_HANDLE_VALUE) {
+		return 0;
+	}
+
+	// get the volume's device number
+	STORAGE_DEVICE_NUMBER sdn;
+	DWORD dwBytesReturned = 0;
+	long res = DeviceIoControl(hVolume, IOCTL_STORAGE_GET_DEVICE_NUMBER, NULL, 0, &sdn, sizeof(sdn), &dwBytesReturned, NULL);
+	if (res) {
+		DeviceNumber = sdn.DeviceNumber;
+	}
+	CloseHandle(hVolume);
+
+	if (DeviceNumber == -1) {
+		return 0;
+	}
+
+	// get the drive type which is required to match the device numbers correctely
+	UINT DriveType = GetDriveTypeA(szRootPath);
+
+	// get the dos device name (like \device\floppy0) to decide if it's a floppy or not - who knows a better way?
+	char szDosDeviceName[MAX_PATH];
+	res = QueryDosDeviceA(szDevicePath, szDosDeviceName, MAX_PATH);
+	if (!res) {
+		return 0;
+	}
+
+	// get the device instance handle of the storage volume by means of a SetupDi enum and matching the device number
+	return windows_get_device_inst(ctx, DeviceNumber, DriveType, szDosDeviceName);
+}
+#pragma comment(lib,"Cfgmgr32.lib")
+
+/*  Modify End Point*/
+
 /*
  * get_device_list: libusb backend device enumeration function
  */
@@ -1471,6 +1792,30 @@ static int winusb_get_device_list(struct libusb_context *ctx, struct discovered_
 	libusb_device **unref_list, **new_unref_list;
 	unsigned int unref_size = UNREF_SIZE_STEP;
 	unsigned int unref_cur = 0;
+
+/*  Modified by YaoGQ  */
+/*  Modify Starting Point*/
+	struct volume_device_priv volume_devices[26];
+	unsigned int volume_devices_size = 0;
+	for (int x = 'A'; x <= 'Z'; x++) {
+		memset(&volume_devices[volume_devices_size].device_key, 0, MAX_PATH);
+		DEVINST devInst = windows_get_device_id(ctx, (char)x, &volume_devices[volume_devices_size].device_key);
+
+		if (devInst != 0) {
+			DEVINST DevInstParent = 0;
+			if(CM_Get_Parent(&DevInstParent, devInst, 0) == CR_SUCCESS){
+				if(CM_Get_Device_IDA(DevInstParent, &volume_devices[volume_devices_size].device_key, MAX_PATH, 0) == CR_SUCCESS){
+					char *temp_device_key = sanitize_path(&volume_devices[volume_devices_size].device_key);
+					memcpy(&volume_devices[volume_devices_size].device_key, temp_device_key, MAX_PATH);
+					free(temp_device_key);
+					usbi_warn(ctx, "fuyao volume %c device key is %s\n", x, volume_devices[volume_devices_size].device_key);
+					volume_devices[volume_devices_size].letter = x;
+					volume_devices_size++;
+				}
+			}
+		}
+	}
+/*  Modify End Point*/
 
 	// PASS 1 : (re)enumerate HCDs (allows for HCD hotplug)
 	// PASS 2 : (re)enumerate HUBS
@@ -1809,6 +2154,13 @@ static int winusb_get_device_list(struct libusb_context *ctx, struct discovered_
 					usbi_warn(ctx, "could not retrieve port number for device '%s': %s", dev_id, windows_error_str(0));
 				r = init_device(dev, parent_dev, (uint8_t)port_nr, dev_info_data.DevInst);
 				if (r == LIBUSB_SUCCESS) {
+
+/*  Modified by YaoGQ  */
+/*  Modify Starting Point*/
+					find_device_volume(dev, volume_devices_size, volume_devices);
+					usbi_info(ctx, "find_device_volume volume is %s", dev->volume);
+/*  Modify End Point*/
+
 					// Append device to the list of discovered devices
 					discdevs = discovered_devs_append(*_discdevs, dev);
 					if (!discdevs)

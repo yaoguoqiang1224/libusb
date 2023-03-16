@@ -270,9 +270,15 @@ static int test_wrapped_device(const char *device_name)
 int main(int argc, char *argv[])
 {
 	const char *device_name = NULL;
-	libusb_device **devs;
 	ssize_t cnt;
-	int r, i;
+	int uiLocationID;
+	libusb_device** pDevs = NULL;
+	libusb_device* dev = NULL;
+	struct libusb_device_descriptor descriptor;
+	int r, i,ret;
+	int vidInt = 0x1b20;
+	int pidInt = 0x0300;
+	int volume = -1;
 
 	for (i = 1; i < argc; i++) {
 		if (!strcmp(argv[i], "-v")) {
@@ -294,16 +300,48 @@ int main(int argc, char *argv[])
 	if (device_name) {
 		r = test_wrapped_device(device_name);
 	} else {
-		cnt = libusb_get_device_list(NULL, &devs);
+		cnt = libusb_get_device_list(NULL, &pDevs);
 		if (cnt < 0) {
 			libusb_exit(NULL);
 			return 1;
 		}
 
-		for (i = 0; devs[i]; i++)
-			print_device(devs[i], NULL);
-
-		libusb_free_device_list(devs, 1);
+		for (i = 0; i< cnt; i++)
+		{
+			dev = pDevs[i];
+			if (dev) {
+				ret = libusb_get_device_descriptor(dev, &descriptor);
+				if (ret < 0) {
+					libusb_free_device_list(pDevs, 1);
+					return -1;
+				}
+				int vid = descriptor.idVendor, pid = descriptor.idProduct;
+				if (vid == vidInt && pid == pidInt)
+				{
+					uint8_t ports[7];
+					uint8_t nPort = 0;
+					uiLocationID = libusb_get_bus_number(dev);
+					uiLocationID &= 0xF;
+					ret = libusb_get_port_numbers(dev, ports, 7);
+					nPort = ret;
+					if (ret > 0) {
+						uiLocationID <<= 4;
+						for (int j = 0; j < nPort; j++) {
+							uiLocationID += (ports[j] & 0xF);
+							if ((j + 1) == nPort)
+								continue;
+							uiLocationID <<= 4;
+						}
+					}
+					printf("%x\n", uiLocationID);
+					
+					libusb_get_volume_device_volume(dev, &volume);
+				}
+				libusb_ref_device(dev);
+			}
+		}
+			
+		libusb_free_device_list(pDevs, 1);
 	}
 
 	libusb_exit(NULL);

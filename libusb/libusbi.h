@@ -508,6 +508,14 @@ struct libusb_device {
 	struct list_head list;
 	unsigned long session_data;
 
+/*  Modified by YaoGQ  */
+/*  Modify Starting Point*/
+	int num_child;
+	char volume[20];
+	char device_key[MAX_PATH];
+	char device_port_hub[MAX_PATH];
+/*  Modify End Point*/
+
 	struct libusb_device_descriptor device_descriptor;
 	usbi_atomic_t attached;
 };

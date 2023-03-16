@@ -1468,6 +1468,14 @@ int LIBUSB_CALL libusb_attach_kernel_driver(libusb_device_handle *dev_handle,
 int LIBUSB_CALL libusb_set_auto_detach_kernel_driver(
 	libusb_device_handle *dev_handle, int enable);
 
+/*  Modified by YaoGQ  */
+/*  Modify Starting Point*/
+char *LIBUSB_CALL libusb_get_device_key(libusb_device *dev);
+char *LIBUSB_CALL libusb_get_device_location_info(libusb_device *dev);
+int LIBUSB_CALL libusb_get_hub_device_ports_num(libusb_device *dev);
+char *LIBUSB_CALL libusb_get_volume_device_volume(libusb_device *dev, int *size);
+/*  Modify End Point*/
+
 /* async I/O */
 
 /** \ingroup libusb_asyncio

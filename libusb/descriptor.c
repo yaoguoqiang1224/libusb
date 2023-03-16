@@ -516,6 +516,36 @@ static int get_config_descriptor(struct libusb_device *dev, uint8_t config_idx,
 	return r;
 }
 
+/*  Modified by YaoGQ  */
+/*  Modify Starting Point*/
+int API_EXPORTED libusb_get_hub_device_ports_num(libusb_device *dev)
+{
+	return dev->num_child;
+}
+
+char *LIBUSB_CALL libusb_get_volume_device_volume(libusb_device *dev, int *size)
+{
+	int i = 0;
+	for (; i < 10; i++) {
+		if (dev->volume[i] == 0) {
+			break;
+		}
+	}
+	*size = i;
+	return &dev->volume;
+}
+
+char *LIBUSB_CALL libusb_get_device_key(libusb_device *dev)
+{
+	return &dev->device_key;
+}
+
+char *LIBUSB_CALL libusb_get_device_location_info(libusb_device *dev)
+{
+	return &dev->device_port_hub;
+}
+/*  Modify End Point*/
+
 /** \ingroup libusb_desc
  * Get the USB device descriptor for a given device.
  *

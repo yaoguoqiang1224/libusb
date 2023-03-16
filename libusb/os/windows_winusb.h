@@ -160,6 +160,14 @@ enum libusb_hid_report_type {
 	HID_REPORT_TYPE_FEATURE = 0x03
 };
 
+/*  Modified by YaoGQ  */
+/*  Modify Starting Point*/
+struct volume_device_priv {
+	char letter;
+	char device_key[MAX_PATH];
+};
+/*  Modify End Point*/
+
 struct hid_device_priv {
 	uint16_t vid;
 	uint16_t pid;
@@ -259,6 +267,14 @@ DLL_DECLARE_FUNC_PREFIXED(WINAPI, HKEY, p, SetupDiOpenDeviceInterfaceRegKey, (HD
 
 #define USB_GET_NODE_INFORMATION			258
 #define USB_GET_DESCRIPTOR_FROM_NODE_CONNECTION		260
+
+/*  Modified by YaoGQ  */
+/*  Modify Starting Point*/
+#if !defined(USB_GET_NODE_CONNECTION_DRIVERKEY_NAME)
+#define USB_GET_NODE_CONNECTION_DRIVERKEY_NAME      264
+#endif
+/*  Modify End Point*/
+
 #define USB_GET_NODE_CONNECTION_INFORMATION_EX		274
 #define USB_GET_NODE_CONNECTION_INFORMATION_EX_V2	279
 
@@ -276,6 +292,15 @@ DLL_DECLARE_FUNC_PREFIXED(WINAPI, HKEY, p, SetupDiOpenDeviceInterfaceRegKey, (HD
 
 #define IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX_V2 \
 	USB_CTL_CODE(USB_GET_NODE_CONNECTION_INFORMATION_EX_V2)
+
+/*  Modified by YaoGQ  */
+/*  Modify Starting Point*/
+#define IOCTL_USB_GET_NODE_CONNECTION_DRIVERKEY_NAME  \
+                                CTL_CODE(FILE_DEVICE_USB,  \
+                                USB_GET_NODE_CONNECTION_DRIVERKEY_NAME,  \
+                                METHOD_BUFFERED,  \
+                                FILE_ANY_ACCESS)
+/*  Modify End Point*/
 
 typedef enum _USB_CONNECTION_STATUS {
 	NoDeviceConnected,
@@ -376,6 +401,17 @@ typedef struct _USB_NODE_CONNECTION_INFORMATION_EX {
 	USB_CONNECTION_STATUS ConnectionStatus;
 //	USB_PIPE_INFO PipeList[0];
 } USB_NODE_CONNECTION_INFORMATION_EX, *PUSB_NODE_CONNECTION_INFORMATION_EX;
+
+/*  Modified by YaoGQ  */
+/*  Modify Starting Point*/
+/** IOCTL_USB_GET_NODE_CONNECTION_DRIVERKEY_NAME **/
+typedef struct _USB_NODE_CONNECTION_DRIVERKEY_NAME {
+	ULONG ConnectionIndex;  /* INPUT */
+	ULONG ActualLength;     /* OUTPUT */
+							/* unicode name for the devnode */
+	WCHAR DriverKeyName[1]; /* OUTPUT */
+} USB_NODE_CONNECTION_DRIVERKEY_NAME, *PUSB_NODE_CONNECTION_DRIVERKEY_NAME;
+/*  Modify End Point*/
 
 typedef union _USB_PROTOCOLS {
 	ULONG ul;
